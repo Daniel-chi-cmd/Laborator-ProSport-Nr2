@@ -1,0 +1,729 @@
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox, simpledialog
+import calendar
+import json
+import os
+import pandas as pd
+from datetime import datetime
+
+
+class WorkTrackerApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Work Tracker Pro v5.0 - Cu Gestiune Financiară")
+        self.root.geometry("1600x950")
+        self.root.configure(bg="#f5f5f5")
+        
+        # Stil modern
+        self.setup_styles()
+        
+        # --- 1. SETUP DATE SI FOLDERE ---
+        self.archive_dir = "work_archive"
+        if not os.path.exists(self.archive_dir):
+            os.makedirs(self.archive_dir)
+            
+        self.data_file = f"{self.archive_dir}/data_lucru.json"
+        self.catalog_file = f"{self.archive_dir}/catalog_materiale.json"
+        
+        self.data = self.load_json(self.data_file, {})
+        self.catalog = self.load_json(self.catalog_file, [])
+        
+        self.current_year = datetime.now().year
+        self.current_month = datetime.now().month
+        
+        self.setup_ui()
+        self.load_month()
+
+    def setup_styles(self):
+        """Configurează stiluri pentru o interfață mai plăcută."""
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # Frame-uri
+        style.configure('TFrame', background='#f5f5f5')
+        style.configure('TLabelframe', background='#f5f5f5')
+        style.configure('TLabelframe.Label', background='#f5f5f5', font=('Segoe UI', 10, 'bold'))
+        
+        # Butoane
+        style.configure('Green.TButton', background='#4CAF50', foreground='white', font=('Segoe UI', 10, 'bold'))
+        style.configure('Orange.TButton', background='#FF9800', foreground='white', font=('Segoe UI', 10, 'bold'))
+        
+        # Labels
+        style.configure('Header.TLabel', font=('Segoe UI', 14, 'bold'), background='#f5f5f5')
+        style.configure('Summary.TLabel', font=('Segoe UI', 11), background='#ffffff')
+
+    def load_json(self, path, default):
+        if os.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                return default
+        return default
+
+    def save_all(self):
+        """Salvează totul automat."""
+        with open(self.data_file, 'w', encoding='utf-8') as f:
+            json.dump(self.data, f, indent=2, ensure_ascii=False)
+        with open(self.catalog_file, 'w', encoding='utf-8') as f:
+            json.dump(self.catalog, f, indent=2, ensure_ascii=False)
+        # Actualizează summary când salvăm
+        self.update_summary()
+
+    def setup_ui(self):
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # --- ZONA DE SUS (CONTROL) ---
+        top_frame = ttk.Frame(main_frame)
+        top_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(top_frame, text="📅 ANUL:", font=('Segoe UI', 10, 'bold')).pack(side=tk.LEFT, padx=5)
+        self.year_var = tk.StringVar(value=str(self.current_year))
+        year_spin = ttk.Spinbox(top_frame, from_=2020, to=2050, width=6, textvariable=self.year_var, command=self.load_month)
+        year_spin.pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(top_frame, text="📆 LUNA:", font=('Segoe UI', 10, 'bold')).pack(side=tk.LEFT, padx=5)
+        self.month_var = tk.StringVar()
+        month_combo = ttk.Combobox(top_frame, textvariable=self.month_var, width=12, state="readonly")
+        month_combo['values'] = list(calendar.month_name)[1:]
+        month_combo.current(self.current_month - 1)
+        month_combo.pack(side=tk.LEFT, padx=5)
+        month_combo.bind('<<ComboboxSelected>>', lambda e: self.load_month())
+
+        # Butoane Meniu
+        ttk.Button(top_frame, text="📂 Manager Catalog", command=self.open_catalog).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(top_frame, text="💾 Salvează", command=self.manual_save).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(top_frame, text="📈 Export Excel", command=self.export_excel).pack(side=tk.RIGHT, padx=5)
+
+        # --- ZONA CENTRALA ---
+        paned = ttk.PanedWindow(main_frame, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True)
+
+        # 1. STANGA: Calendar
+        frame_cal = ttk.LabelFrame(paned, text="📅 Calendar", padding=5)
+        paned.add(frame_cal, weight=1)
+        self.listbox_days = tk.Listbox(frame_cal, font=('Segoe UI', 11), activestyle='none', 
+                                        bg='#ffffff', selectbackground='#4CAF50', selectforeground='white')
+        self.listbox_days.pack(fill=tk.BOTH, expand=True)
+        self.listbox_days.bind('<<ListboxSelect>>', self.select_day)
+
+        # 2. CENTRU: Zona de Lucru
+        frame_work = ttk.Frame(paned)
+        paned.add(frame_work, weight=4)
+
+        self.lbl_day_info = ttk.Label(frame_work, text="👆 Selectează o zi din calendar", style='Header.TLabel')
+        self.lbl_day_info.pack(pady=10)
+
+        # --- ZONA FINANCIARĂ ---
+        finance_frame = tk.LabelFrame(frame_work, text="💰 Gestiune Financiară Zilnică", 
+                                       font=('Segoe UI', 10, 'bold'), bg='#E3F2FD', fg='#1565C0', padx=10, pady=10)
+        finance_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        # Bani Primiți (+)
+        row1 = tk.Frame(finance_frame, bg='#E3F2FD')
+        row1.pack(fill=tk.X, pady=3)
+        tk.Label(row1, text="💵 Bani Primiți (+):", bg='#E3F2FD', fg='#2E7D32', 
+                 font=('Segoe UI', 11, 'bold'), width=18, anchor='w').pack(side=tk.LEFT)
+        self.entry_income = ttk.Entry(row1, font=('Segoe UI', 12), width=15)
+        self.entry_income.pack(side=tk.LEFT, padx=5)
+        tk.Label(row1, text="Lei", bg='#E3F2FD', font=('Segoe UI', 10)).pack(side=tk.LEFT)
+        self.entry_income.bind("<KeyRelease>", self.save_finance)
+
+        # Bani Cheltuiți (-)
+        row2 = tk.Frame(finance_frame, bg='#E3F2FD')
+        row2.pack(fill=tk.X, pady=3)
+        tk.Label(row2, text="💸 Bani Cheltuiți (-):", bg='#E3F2FD', fg='#C62828', 
+                 font=('Segoe UI', 11, 'bold'), width=18, anchor='w').pack(side=tk.LEFT)
+        self.entry_expense = ttk.Entry(row2, font=('Segoe UI', 12), width=15)
+        self.entry_expense.pack(side=tk.LEFT, padx=5)
+        tk.Label(row2, text="Lei", bg='#E3F2FD', font=('Segoe UI', 10)).pack(side=tk.LEFT)
+        self.entry_expense.bind("<KeyRelease>", self.save_finance)
+
+        # Profit zilnic
+        row3 = tk.Frame(finance_frame, bg='#E3F2FD')
+        row3.pack(fill=tk.X, pady=5)
+        tk.Label(row3, text="📊 Profit Zilnic:", bg='#E3F2FD', 
+                 font=('Segoe UI', 11, 'bold'), width=18, anchor='w').pack(side=tk.LEFT)
+        self.lbl_daily_profit = tk.Label(row3, text="0.00 Lei", bg='#E3F2FD', 
+                                          font=('Segoe UI', 14, 'bold'), fg='#1565C0')
+        self.lbl_daily_profit.pack(side=tk.LEFT, padx=5)
+
+        # Butoane de adăugare
+        btn_box = ttk.Frame(frame_work)
+        btn_box.pack(fill=tk.X, pady=10, padx=10)
+        
+        btn_work = tk.Button(btn_box, text="➕ ADAUGĂ MUNCĂ (Materiale)", bg="#4CAF50", fg="white", 
+                             font=('Segoe UI', 10, 'bold'), cursor='hand2',
+                             command=lambda: self.add_entry("Muncă"))
+        btn_work.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True, ipady=5)
+        
+        btn_other = tk.Button(btn_box, text="➕ ADAUGĂ ALTELE / PERSOANE", bg="#FF9800", fg="white", 
+                              font=('Segoe UI', 10, 'bold'), cursor='hand2',
+                              command=lambda: self.add_entry("Altele"))
+        btn_other.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True, ipady=5)
+
+        # Zona scrollabilă pentru intrări
+        self.canvas = tk.Canvas(frame_work, bg="#fafafa", highlightthickness=1, highlightbackground="#ddd")
+        scrollbar = ttk.Scrollbar(frame_work, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = ttk.Frame(self.canvas)
+
+        self.scrollable_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        # 3. DREAPTA: Summary + Calculator
+        frame_right = ttk.Frame(paned)
+        paned.add(frame_right, weight=2)
+        
+        # --- SUMMARY PANEL ---
+        self.build_summary(frame_right)
+        
+        # --- CALCULATOR ---
+        self.build_calculator(frame_right)
+
+    # --- SUMMARY PANEL ---
+    def build_summary(self, parent):
+        """Construiește panoul de sumar cu statistici financiare."""
+        summary_frame = tk.LabelFrame(parent, text="📊 SUMAR FINANCIAR", 
+                                       font=('Segoe UI', 11, 'bold'), bg='#ffffff', 
+                                       fg='#1565C0', padx=15, pady=15)
+        summary_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        # Titlu luna
+        self.lbl_summary_title = tk.Label(summary_frame, text="Luna curentă", 
+                                           bg='#ffffff', font=('Segoe UI', 12, 'bold'), fg='#333')
+        self.lbl_summary_title.pack(pady=(0, 10))
+
+        # Separator
+        ttk.Separator(summary_frame, orient='horizontal').pack(fill=tk.X, pady=5)
+
+        # Total Venituri
+        row_income = tk.Frame(summary_frame, bg='#ffffff')
+        row_income.pack(fill=tk.X, pady=5)
+        tk.Label(row_income, text="💵 Total Venituri:", bg='#ffffff', 
+                 font=('Segoe UI', 10), anchor='w', width=20).pack(side=tk.LEFT)
+        self.lbl_total_income = tk.Label(row_income, text="0.00 Lei", bg='#ffffff', 
+                                          font=('Segoe UI', 12, 'bold'), fg='#2E7D32')
+        self.lbl_total_income.pack(side=tk.RIGHT)
+
+        # Total Cheltuieli
+        row_expense = tk.Frame(summary_frame, bg='#ffffff')
+        row_expense.pack(fill=tk.X, pady=5)
+        tk.Label(row_expense, text="💸 Total Cheltuieli:", bg='#ffffff', 
+                 font=('Segoe UI', 10), anchor='w', width=20).pack(side=tk.LEFT)
+        self.lbl_total_expense = tk.Label(row_expense, text="0.00 Lei", bg='#ffffff', 
+                                           font=('Segoe UI', 12, 'bold'), fg='#C62828')
+        self.lbl_total_expense.pack(side=tk.RIGHT)
+
+        # Separator
+        ttk.Separator(summary_frame, orient='horizontal').pack(fill=tk.X, pady=10)
+
+        # PROFIT TOTAL
+        row_profit = tk.Frame(summary_frame, bg='#E8F5E9', padx=10, pady=10)
+        row_profit.pack(fill=tk.X, pady=5)
+        tk.Label(row_profit, text="📈 PROFIT TOTAL:", bg='#E8F5E9', 
+                 font=('Segoe UI', 11, 'bold'), anchor='w').pack(side=tk.LEFT)
+        self.lbl_total_profit = tk.Label(row_profit, text="0.00 Lei", bg='#E8F5E9', 
+                                          font=('Segoe UI', 16, 'bold'), fg='#1565C0')
+        self.lbl_total_profit.pack(side=tk.RIGHT)
+
+        # Separator
+        ttk.Separator(summary_frame, orient='horizontal').pack(fill=tk.X, pady=10)
+
+        # Statistici adiționale
+        stats_frame = tk.Frame(summary_frame, bg='#ffffff')
+        stats_frame.pack(fill=tk.X)
+
+        # Zile lucrate
+        row_days = tk.Frame(stats_frame, bg='#ffffff')
+        row_days.pack(fill=tk.X, pady=3)
+        tk.Label(row_days, text="📅 Zile cu activitate:", bg='#ffffff', 
+                 font=('Segoe UI', 9), anchor='w', width=20).pack(side=tk.LEFT)
+        self.lbl_work_days = tk.Label(row_days, text="0", bg='#ffffff', 
+                                       font=('Segoe UI', 10, 'bold'), fg='#555')
+        self.lbl_work_days.pack(side=tk.RIGHT)
+
+        # Intrări totale
+        row_entries = tk.Frame(stats_frame, bg='#ffffff')
+        row_entries.pack(fill=tk.X, pady=3)
+        tk.Label(row_entries, text="📝 Total intrări:", bg='#ffffff', 
+                 font=('Segoe UI', 9), anchor='w', width=20).pack(side=tk.LEFT)
+        self.lbl_total_entries = tk.Label(row_entries, text="0", bg='#ffffff', 
+                                           font=('Segoe UI', 10, 'bold'), fg='#555')
+        self.lbl_total_entries.pack(side=tk.RIGHT)
+
+        # Media zilnică
+        row_avg = tk.Frame(stats_frame, bg='#ffffff')
+        row_avg.pack(fill=tk.X, pady=3)
+        tk.Label(row_avg, text="📊 Profit mediu/zi:", bg='#ffffff', 
+                 font=('Segoe UI', 9), anchor='w', width=20).pack(side=tk.LEFT)
+        self.lbl_avg_profit = tk.Label(row_avg, text="0.00 Lei", bg='#ffffff', 
+                                        font=('Segoe UI', 10, 'bold'), fg='#555')
+        self.lbl_avg_profit.pack(side=tk.RIGHT)
+
+    def update_summary(self):
+        """Actualizează panoul de sumar cu datele din luna curentă."""
+        m_idx = list(calendar.month_name).index(self.month_var.get())
+        month_key = f"{self.year_var.get()}-{m_idx:02d}"
+        
+        # Titlu
+        self.lbl_summary_title.config(text=f"{self.month_var.get()} {self.year_var.get()}")
+        
+        total_income = 0
+        total_expense = 0
+        work_days = 0
+        total_entries = 0
+        
+        if month_key in self.data:
+            month_data = self.data[month_key]
+            for day_key, day_data in month_data.items():
+                if isinstance(day_data, dict):
+                    # Date financiare
+                    income = float(day_data.get('income', 0) or 0)
+                    expense = float(day_data.get('expense', 0) or 0)
+                    total_income += income
+                    total_expense += expense
+                    
+                    # Intrări
+                    entries = day_data.get('entries', [])
+                    if entries or income > 0 or expense > 0:
+                        work_days += 1
+                    total_entries += len(entries)
+                elif isinstance(day_data, list):
+                    # Format vechi - doar intrări
+                    if day_data:
+                        work_days += 1
+                    total_entries += len(day_data)
+        
+        profit = total_income - total_expense
+        avg_profit = profit / work_days if work_days > 0 else 0
+        
+        # Actualizare labels
+        self.lbl_total_income.config(text=f"{total_income:,.2f} Lei")
+        self.lbl_total_expense.config(text=f"{total_expense:,.2f} Lei")
+        self.lbl_total_profit.config(text=f"{profit:,.2f} Lei")
+        self.lbl_work_days.config(text=str(work_days))
+        self.lbl_total_entries.config(text=str(total_entries))
+        self.lbl_avg_profit.config(text=f"{avg_profit:,.2f} Lei")
+        
+        # Culoare profit
+        if profit >= 0:
+            self.lbl_total_profit.config(fg='#2E7D32')
+        else:
+            self.lbl_total_profit.config(fg='#C62828')
+
+    def save_finance(self, event=None):
+        """Salvează datele financiare pentru ziua curentă."""
+        if not hasattr(self, 'current_day'):
+            return
+            
+        mk, dk = self.get_key()
+        if mk not in self.data:
+            self.data[mk] = {}
+        
+        # Migrează la noul format dacă e necesar
+        if dk not in self.data[mk]:
+            self.data[mk][dk] = {'income': 0, 'expense': 0, 'entries': []}
+        elif isinstance(self.data[mk][dk], list):
+            # Migrează din formatul vechi
+            old_entries = self.data[mk][dk]
+            self.data[mk][dk] = {'income': 0, 'expense': 0, 'entries': old_entries}
+        
+        # Salvează valorile
+        try:
+            self.data[mk][dk]['income'] = float(self.entry_income.get() or 0)
+        except ValueError:
+            self.data[mk][dk]['income'] = 0
+            
+        try:
+            self.data[mk][dk]['expense'] = float(self.entry_expense.get() or 0)
+        except ValueError:
+            self.data[mk][dk]['expense'] = 0
+        
+        # Calculează și afișează profitul zilnic
+        income = self.data[mk][dk]['income']
+        expense = self.data[mk][dk]['expense']
+        daily_profit = income - expense
+        
+        self.lbl_daily_profit.config(text=f"{daily_profit:,.2f} Lei")
+        if daily_profit >= 0:
+            self.lbl_daily_profit.config(fg='#2E7D32')
+        else:
+            self.lbl_daily_profit.config(fg='#C62828')
+        
+        self.save_all()
+
+    def load_finance_for_day(self):
+        """Încarcă datele financiare pentru ziua selectată."""
+        if not hasattr(self, 'current_day'):
+            return
+            
+        mk, dk = self.get_key()
+        
+        # Resetează câmpurile
+        self.entry_income.delete(0, tk.END)
+        self.entry_expense.delete(0, tk.END)
+        
+        if mk in self.data and dk in self.data[mk]:
+            day_data = self.data[mk][dk]
+            if isinstance(day_data, dict):
+                income = day_data.get('income', 0)
+                expense = day_data.get('expense', 0)
+                
+                if income:
+                    self.entry_income.insert(0, str(income))
+                if expense:
+                    self.entry_expense.insert(0, str(expense))
+                
+                daily_profit = income - expense
+                self.lbl_daily_profit.config(text=f"{daily_profit:,.2f} Lei")
+                if daily_profit >= 0:
+                    self.lbl_daily_profit.config(fg='#2E7D32')
+                else:
+                    self.lbl_daily_profit.config(fg='#C62828')
+            else:
+                self.lbl_daily_profit.config(text="0.00 Lei", fg='#1565C0')
+        else:
+            self.lbl_daily_profit.config(text="0.00 Lei", fg='#1565C0')
+
+    # --- DESENARE INTRĂRI ---
+    def draw_entry_card(self, idx, entry):
+        bg_color = "#E8F5E9" if entry['Tip'] == "Muncă" else "#FFF3E0"
+        border_color = "#2E7D32" if entry['Tip'] == "Muncă" else "#EF6C00"
+        
+        card = tk.LabelFrame(self.scrollable_frame, text=f" {entry['Tip']} #{idx+1} ", 
+                             bg=bg_color, fg=border_color, font=('Segoe UI', 9, 'bold'),
+                             padx=10, pady=10)
+        card.pack(fill=tk.X, padx=10, pady=8, ipady=5)
+
+        # Locație
+        r1 = tk.Frame(card, bg=bg_color)
+        r1.pack(fill=tk.X, padx=5, pady=3)
+        tk.Label(r1, text="📍 Locație:", bg=bg_color, font=('Segoe UI', 9, 'bold'), 
+                 width=12, anchor='w').pack(side=tk.LEFT)
+        ent_loc = ttk.Entry(r1, font=('Segoe UI', 10))
+        ent_loc.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        ent_loc.insert(0, entry.get('Locatie', ''))
+        
+        # Buton Ștergere
+        tk.Button(r1, text="✖", bg="#ffcdd2", fg="#C62828", font=('Segoe UI', 9, 'bold'),
+                  cursor='hand2', command=lambda: self.delete_entry(idx)).pack(side=tk.RIGHT)
+
+        if entry['Tip'] == "Muncă":
+            # --- ZONA MATERIALE INTELIGENTĂ ---
+            mat_frame = tk.LabelFrame(card, text="🔧 Materiale (Scrie nume nou pt. adăugare)", 
+                                       bg=bg_color, padx=8, pady=8, font=('Segoe UI', 8))
+            mat_frame.pack(fill=tk.X, padx=5, pady=8)
+            
+            # Dropdown editabil
+            all_mats = sorted([m['nume'] for m in self.catalog])
+            combo = ttk.Combobox(mat_frame, values=all_mats, width=25, font=('Segoe UI', 9))
+            combo.pack(side=tk.LEFT, padx=2)
+            
+            # Filtrare
+            def filter_mats(event):
+                typed = combo.get().lower()
+                if typed == '':
+                    combo['values'] = all_mats
+                else:
+                    combo['values'] = [m for m in all_mats if typed in m.lower()]
+                
+            combo.bind('<KeyRelease>', filter_mats)
+
+            tk.Label(mat_frame, text="Cant:", bg=bg_color, font=('Segoe UI', 9)).pack(side=tk.LEFT, padx=(10, 2))
+            ent_qty = ttk.Entry(mat_frame, width=8, font=('Segoe UI', 9))
+            ent_qty.pack(side=tk.LEFT, padx=2)
+
+            lbl_list = tk.Label(mat_frame, text=self.format_materials(entry), bg=bg_color, 
+                                fg="#1565C0", font=('Segoe UI', 8), wraplength=200, justify='left')
+            
+            # --- LOGICA DE AUTO-ADĂUGARE ---
+            def add_mat_smart():
+                name = combo.get().strip()
+                qty = ent_qty.get().strip()
+                
+                if name and qty:
+                    # Verificăm dacă există deja în catalog
+                    found_unit = None
+                    for m in self.catalog:
+                        if m['nume'].lower() == name.lower():
+                            found_unit = m['unit']
+                            name = m['nume']  # Corectăm capitalizarea
+                            break
+                    
+                    # Dacă NU există, îl creăm pe loc
+                    if not found_unit:
+                        ask_unit = simpledialog.askstring("Material Nou", 
+                                                        f"Materialul '{name}' este nou!\nCe unitate de măsură are? (m, buc, kg etc.)",
+                                                        parent=self.root)
+                        if ask_unit:
+                            found_unit = ask_unit
+                            self.catalog.append({"nume": name, "unit": found_unit})
+                            self.save_all()
+                            all_mats.append(name)
+                            all_mats.sort()
+                            combo['values'] = all_mats
+                        else:
+                            return
+
+                    # Adăugăm în lista de lucru a zilei
+                    if 'lista_mat' not in entry:
+                        entry['lista_mat'] = []
+                    entry['lista_mat'].append({'n': name, 'q': qty, 'u': found_unit})
+                    
+                    lbl_list.config(text=self.format_materials(entry))
+                    combo.set('')
+                    ent_qty.delete(0, tk.END)
+                    self.save_all()
+                else:
+                    messagebox.showwarning("Lipsă date", "Scrieți numele materialului și cantitatea.")
+
+            tk.Button(mat_frame, text="➕", command=add_mat_smart, width=3, bg="#81C784", 
+                      fg="white", font=('Segoe UI', 9, 'bold'), cursor='hand2').pack(side=tk.LEFT, padx=8)
+            lbl_list.pack(side=tk.LEFT, padx=10)
+
+        elif entry['Tip'] == "Altele":
+            # Persoane
+            r2 = tk.Frame(card, bg=bg_color)
+            r2.pack(fill=tk.X, padx=5, pady=3)
+            tk.Label(r2, text="👥 Persoane:", bg=bg_color, font=('Segoe UI', 9, 'bold'), 
+                     width=12, anchor='w').pack(side=tk.LEFT)
+            ent_pers = ttk.Entry(r2, font=('Segoe UI', 10))
+            ent_pers.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            ent_pers.insert(0, entry.get('Persoane', ''))
+            
+            def save_pers(e):
+                entry['Persoane'] = ent_pers.get()
+                self.save_all()
+            ent_pers.bind("<KeyRelease>", save_pers)
+
+        # Comentariu - cu spațiu mai mare și text wrapping
+        r3 = tk.Frame(card, bg=bg_color)
+        r3.pack(fill=tk.X, padx=5, pady=8)
+        tk.Label(r3, text="💬 Comentariu:", bg=bg_color, font=('Segoe UI', 9, 'bold'), 
+                 width=12, anchor='nw').pack(side=tk.LEFT, anchor='n')
+        
+        # Folosim Text widget pentru comentarii mai lungi cu wrapping
+        comment_frame = tk.Frame(r3, bg=bg_color)
+        comment_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        txt_com = tk.Text(comment_frame, font=('Segoe UI', 10), height=3, wrap=tk.WORD,
+                          relief='solid', borderwidth=1)
+        txt_com.pack(fill=tk.X, expand=True)
+        txt_com.insert('1.0', entry.get('Comentariu', ''))
+
+        def auto_save(e=None):
+            entry['Locatie'] = ent_loc.get()
+            entry['Comentariu'] = txt_com.get('1.0', 'end-1c')
+            self.save_all()
+
+        ent_loc.bind("<KeyRelease>", auto_save)
+        txt_com.bind("<KeyRelease>", auto_save)
+
+    # --- CATALOG (Rămâne opțional acum) ---
+    def open_catalog(self):
+        win = tk.Toplevel(self.root)
+        win.title("📂 Catalog Materiale")
+        win.geometry("450x550")
+        win.configure(bg='#f5f5f5')
+        
+        f_add = ttk.LabelFrame(win, text="➕ Adaugă Manual", padding=10)
+        f_add.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Label(f_add, text="Nume:").grid(row=0, column=0, pady=3)
+        e_n = ttk.Entry(f_add, font=('Segoe UI', 10))
+        e_n.grid(row=0, column=1, sticky="ew", pady=3)
+        
+        ttk.Label(f_add, text="Unitate:").grid(row=1, column=0, pady=3)
+        e_u = ttk.Combobox(f_add, values=["m", "buc", "kg", "l", "mp", "ml"], font=('Segoe UI', 10))
+        e_u.grid(row=1, column=1, pady=3)
+        
+        def add_db():
+            if e_n.get() and e_u.get():
+                self.catalog.append({"nume": e_n.get(), "unit": e_u.get()})
+                self.save_all()
+                refresh()
+                e_n.delete(0, tk.END)
+        
+        ttk.Button(f_add, text="💾 Salvează", command=add_db).grid(row=2, columnspan=2, pady=10)
+
+        lb = tk.Listbox(win, font=('Segoe UI', 10), bg='white')
+        lb.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        def refresh():
+            lb.delete(0, tk.END)
+            for m in sorted(self.catalog, key=lambda x: x['nume']):
+                lb.insert(tk.END, f"  {m['nume']} ({m['unit']})")
+        refresh()
+
+    # --- CALCULATOR ---
+    def build_calculator(self, parent):
+        f = ttk.LabelFrame(parent, text="🔢 Calculator", padding=10)
+        f.pack(fill=tk.X, padx=5, pady=10)
+        
+        self.calc_display = ttk.Entry(f, font=('Consolas', 14), justify='right')
+        self.calc_display.pack(fill=tk.X, pady=8)
+        
+        btns_frame = ttk.Frame(f)
+        btns_frame.pack()
+        
+        buttons = ['7', '8', '9', '/', '4', '5', '6', '*', '1', '2', '3', '-', 'C', '0', '=', '+']
+        r, c = 0, 0
+        for b in buttons:
+            cmd = lambda x=b: self.calc_click(x)
+            bg_col = '#E3F2FD' if b.isdigit() or b == '.' else '#BBDEFB'
+            if b == 'C':
+                bg_col = '#ffcdd2'
+            elif b == '=':
+                bg_col = '#C8E6C9'
+            tk.Button(btns_frame, text=b, width=5, height=2, command=cmd, 
+                      bg=bg_col, font=('Segoe UI', 11, 'bold'), cursor='hand2').grid(row=r, column=c, padx=2, pady=2)
+            c += 1
+            if c > 3:
+                c = 0
+                r += 1
+
+    def calc_click(self, key):
+        if key == 'C':
+            self.calc_display.delete(0, tk.END)
+        elif key == '=':
+            try:
+                res = eval(self.calc_display.get())
+                self.calc_display.delete(0, tk.END)
+                self.calc_display.insert(tk.END, str(res))
+            except:
+                messagebox.showerror("Eroare", "Calcul greșit")
+        else:
+            self.calc_display.insert(tk.END, key)
+
+    # --- HELPERS ---
+    def format_materials(self, entry):
+        lst = entry.get('lista_mat', [])
+        if lst:
+            return "\n".join([f"• {x['n']} {x['q']}{x['u']}" for x in lst])
+        return ""
+
+    def load_month(self):
+        self.listbox_days.delete(0, tk.END)
+        y, m = int(self.year_var.get()), list(calendar.month_name).index(self.month_var.get())
+        _, days = calendar.monthrange(y, m)
+        for d in range(1, days + 1):
+            self.listbox_days.insert(tk.END, f"  📅 Ziua {d}")
+        self.update_summary()
+
+    def select_day(self, event):
+        sel = self.listbox_days.curselection()
+        if sel:
+            self.current_day = sel[0] + 1
+            self.lbl_day_info.config(text=f"📅 Activitate: {self.current_day} {self.month_var.get()} {self.year_var.get()}")
+            self.load_finance_for_day()
+            self.refresh_entries_ui()
+
+    def get_key(self):
+        m_idx = list(calendar.month_name).index(self.month_var.get())
+        return f"{self.year_var.get()}-{m_idx:02d}", str(self.current_day)
+
+    def add_entry(self, tip):
+        if not hasattr(self, 'current_day'):
+            messagebox.showwarning("!", "Selectează o zi din stânga!")
+            return
+        mk, dk = self.get_key()
+        if mk not in self.data:
+            self.data[mk] = {}
+        
+        # Migrează la noul format dacă e necesar
+        if dk not in self.data[mk]:
+            self.data[mk][dk] = {'income': 0, 'expense': 0, 'entries': []}
+        elif isinstance(self.data[mk][dk], list):
+            old_entries = self.data[mk][dk]
+            self.data[mk][dk] = {'income': 0, 'expense': 0, 'entries': old_entries}
+        
+        self.data[mk][dk]['entries'].append({"Tip": tip, "Locatie": "", "Comentariu": "", "Persoane": ""})
+        self.save_all()
+        self.refresh_entries_ui()
+
+    def delete_entry(self, idx):
+        if messagebox.askyesno("Șterge", "Sigur ștergi această intrare?"):
+            mk, dk = self.get_key()
+            day_data = self.data[mk][dk]
+            if isinstance(day_data, dict):
+                del day_data['entries'][idx]
+            else:
+                del day_data[idx]
+            self.save_all()
+            self.refresh_entries_ui()
+
+    def refresh_entries_ui(self):
+        for w in self.scrollable_frame.winfo_children():
+            w.destroy()
+        mk, dk = self.get_key()
+        day_data = self.data.get(mk, {}).get(dk, {})
+        
+        if isinstance(day_data, dict):
+            entries = day_data.get('entries', [])
+        else:
+            entries = day_data  # Format vechi
+            
+        for i, ent in enumerate(entries):
+            self.draw_entry_card(i, ent)
+
+    def manual_save(self):
+        self.save_all()
+        messagebox.showinfo("💾 Salvat", "Datele au fost salvate cu succes!")
+
+    def export_excel(self):
+        rows = []
+        for mk, days in self.data.items():
+            for dk, day_data in days.items():
+                if isinstance(day_data, dict):
+                    income = day_data.get('income', 0)
+                    expense = day_data.get('expense', 0)
+                    entries = day_data.get('entries', [])
+                else:
+                    income = 0
+                    expense = 0
+                    entries = day_data
+                
+                # Adaugă rând pentru finanțe
+                if income > 0 or expense > 0:
+                    rows.append({
+                        "Data": f"{dk}-{mk}",
+                        "Tip": "Finanțe",
+                        "Venituri": income,
+                        "Cheltuieli": expense,
+                        "Profit": income - expense,
+                        "Locatie": "",
+                        "Comentariu": "",
+                        "Detalii (Mat/Pers)": ""
+                    })
+                
+                for e in entries:
+                    row = {
+                        "Data": f"{dk}-{mk}",
+                        "Tip": e['Tip'],
+                        "Venituri": "",
+                        "Cheltuieli": "",
+                        "Profit": "",
+                        "Locatie": e.get('Locatie', ''),
+                        "Comentariu": e.get('Comentariu', '')
+                    }
+                    row["Detalii (Mat/Pers)"] = self.format_materials(e).replace('\n', ' | ') if e['Tip'] == "Muncă" else e.get('Persoane', '')
+                    rows.append(row)
+        
+        if rows:
+            path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")])
+            if path:
+                pd.DataFrame(rows).to_excel(path, index=False)
+                messagebox.showinfo("📈 Export", "Fișier Excel creat cu succes!")
+        else:
+            messagebox.showwarning("!", "Nu există date de exportat.")
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = WorkTrackerApp(root)
+    root.mainloop()
